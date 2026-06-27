@@ -61,7 +61,10 @@ type MenuCategory = {
   name: string;
   is_active: boolean;
   dishes_count: number;
+  parent_category_id: string | null;
 };
+
+type CategoryNode = MenuCategory & { children: MenuCategory[] };
 
 /* -------------------------------------------------------------------------- */
 /* SORTABLE ITEM */
@@ -81,9 +84,7 @@ function SortableCategory({
     transform,
     transition,
     isDragging,
-  } = useSortable({
-    id: category.id,
-  });
+  } = useSortable({ id: category.id });
 
   const style = {
     transform: CSS.Transform.toString(transform),
@@ -94,31 +95,41 @@ function SortableCategory({
     <div
       ref={setNodeRef}
       style={style}
-      className={`${isDragging ? 'opacity-50' : ''}`}
+      className={isDragging ? 'opacity-50' : ''}
     >
       <div className="flex gap-3 items-start">
-        {/* Larger touch drag handle */}
         <div
           {...listeners}
           {...attributes}
-          className="
-            flex items-center justify-center
-            min-w-[44px]
-            min-h-[44px]
-            cursor-grab
-            active:cursor-grabbing
-            text-slate-400
-            hover:text-slate-600
-            touch-none
-          "
+          className="flex items-center justify-center min-w-[44px] min-h-[44px] cursor-grab active:cursor-grabbing text-slate-400 hover:text-slate-600 touch-none"
         >
           <GripVertical size={20} />
         </div>
-
         <div className="flex-1">{children}</div>
       </div>
     </div>
   );
+}
+
+/* -------------------------------------------------------------------------- */
+/* BUILD TREE */
+/* -------------------------------------------------------------------------- */
+
+function buildTree(categories: MenuCategory[]): CategoryNode[] {
+  const map = new Map<string, CategoryNode>();
+  const roots: CategoryNode[] = [];
+
+  categories.forEach((c) => map.set(c.id, { ...c, children: [] }));
+
+  map.forEach((node) => {
+    if (node.parent_category_id && map.has(node.parent_category_id)) {
+      map.get(node.parent_category_id)!.children.push(node);
+    } else {
+      roots.push(node);
+    }
+  });
+
+  return roots;
 }
 
 /* -------------------------------------------------------------------------- */
@@ -128,45 +139,30 @@ function SortableCategory({
 export default function MenuCategoriesPage() {
   const [categories, setCategories] = useState<MenuCategory[]>([]);
   const [restaurantId, setRestaurantId] = useState<string | null>(null);
-
   const [loading, setLoading] = useState(true);
 
   const [dialogOpen, setDialogOpen] = useState(false);
   const [newCategoryName, setNewCategoryName] = useState('');
+  const [newParentId, setNewParentId] = useState('');
 
-  const [editingCategory, setEditingCategory] =
-    useState<MenuCategory | null>(null);
-
+  const [editingCategory, setEditingCategory] = useState<MenuCategory | null>(null);
   const [editName, setEditName] = useState('');
-
-  /* -------------------------------------------------------------------------- */
-  /* MOBILE FRIENDLY DRAG SENSOR */
-  /* -------------------------------------------------------------------------- */
+  const [editParentId, setEditParentId] = useState('');
 
   const sensors = useSensors(
-    useSensor(PointerSensor, {
-      activationConstraint: {
-        distance: 8, // prevents accidental drag while scrolling
-      },
-    })
+    useSensor(PointerSensor, { activationConstraint: { distance: 8 } })
   );
 
-  useEffect(() => {
-    loadCategories();
-  }, []);
+  useEffect(() => { loadCategories(); }, []);
 
   /* -------------------------------------------------------------------------- */
   /* LOAD */
-/* -------------------------------------------------------------------------- */
+  /* -------------------------------------------------------------------------- */
 
   const loadCategories = async () => {
     setLoading(true);
-
     try {
-      const {
-        data: { user },
-      } = await supabaseBrowser.auth.getUser();
-
+      const { data: { user } } = await supabaseBrowser.auth.getUser();
       if (!user) return;
 
       const { data: restaurant } = await supabaseBrowser
@@ -176,17 +172,11 @@ export default function MenuCategoriesPage() {
         .single();
 
       if (!restaurant) throw new Error('Restaurant not found');
-
       setRestaurantId(restaurant.id);
 
       const { data, error } = await supabaseBrowser
         .from('menu_categories')
-        .select(`
-          id,
-          name,
-          is_active,
-          dishes ( count )
-        `)
+        .select('id, name, is_active, parent_category_id, dishes ( count )')
         .eq('restaurant_id', restaurant.id)
         .order('display_order');
 
@@ -197,6 +187,7 @@ export default function MenuCategoriesPage() {
           id: c.id,
           name: c.name,
           is_active: c.is_active,
+          parent_category_id: c.parent_category_id ?? null,
           dishes_count: c.dishes?.[0]?.count ?? 0,
         }))
       );
@@ -209,37 +200,27 @@ export default function MenuCategoriesPage() {
 
   /* -------------------------------------------------------------------------- */
   /* CREATE */
-/* -------------------------------------------------------------------------- */
+  /* -------------------------------------------------------------------------- */
 
   const createCategory = async () => {
-    if (!newCategoryName.trim()) {
-      toast.error('Category name required');
-      return;
-    }
-
+    if (!newCategoryName.trim()) { toast.error('Category name required'); return; }
     try {
       const res = await fetch('/api/categories', {
         method: 'POST',
-
-        headers: {
-          'Content-Type': 'application/json',
-        },
-
+        headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           name: newCategoryName,
           restaurant_id: restaurantId,
           display_order: categories.length,
           is_active: true,
+          parent_category_id: newParentId || null,
         }),
       });
-
       if (!res.ok) throw new Error();
-
       toast.success('Created');
-
       setDialogOpen(false);
       setNewCategoryName('');
-
+      setNewParentId('');
       loadCategories();
     } catch {
       toast.error('Create failed');
@@ -247,29 +228,22 @@ export default function MenuCategoriesPage() {
   };
 
   /* -------------------------------------------------------------------------- */
-  /* UPDATE NAME */
-/* -------------------------------------------------------------------------- */
+  /* UPDATE */
+  /* -------------------------------------------------------------------------- */
 
-  const updateCategoryName = async () => {
+  const updateCategory = async () => {
     if (!editingCategory) return;
-
     try {
       await fetch(`/api/categories/${editingCategory.id}`, {
         method: 'PUT',
-
-        headers: {
-          'Content-Type': 'application/json',
-        },
-
+        headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           name: editName,
+          parent_category_id: editParentId || null,
         }),
       });
-
       toast.success('Updated');
-
       setEditingCategory(null);
-
       loadCategories();
     } catch {
       toast.error('Update failed');
@@ -278,31 +252,17 @@ export default function MenuCategoriesPage() {
 
   /* -------------------------------------------------------------------------- */
   /* TOGGLE */
-/* -------------------------------------------------------------------------- */
+  /* -------------------------------------------------------------------------- */
 
-  const toggleCategoryActive = async (
-    id: string,
-    current: boolean
-  ) => {
+  const toggleCategoryActive = async (id: string, current: boolean) => {
     try {
       await fetch(`/api/categories/${id}`, {
         method: 'PUT',
-
-        headers: {
-          'Content-Type': 'application/json',
-        },
-
-        body: JSON.stringify({
-          is_active: !current,
-        }),
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ is_active: !current }),
       });
-
       setCategories((prev) =>
-        prev.map((c) =>
-          c.id === id
-            ? { ...c, is_active: !current }
-            : c
-        )
+        prev.map((c) => c.id === id ? { ...c, is_active: !current } : c)
       );
     } catch {
       toast.error('Failed');
@@ -311,63 +271,44 @@ export default function MenuCategoriesPage() {
 
   /* -------------------------------------------------------------------------- */
   /* DELETE */
-/* -------------------------------------------------------------------------- */
+  /* -------------------------------------------------------------------------- */
 
   const deleteCategory = async (category: MenuCategory) => {
-    if (category.is_active) {
-      toast.error('Deactivate first');
-      return;
-    }
-
+    if (category.is_active) { toast.error('Deactivate first'); return; }
     if (!confirm('Delete category?')) return;
-
     try {
-      await fetch(`/api/categories/${category.id}`, {
-        method: 'DELETE',
-      });
-
+      await fetch(`/api/categories/${category.id}`, { method: 'DELETE' });
       toast.success('Deleted');
-
-      setCategories((prev) =>
-        prev.filter((c) => c.id !== category.id)
-      );
+      loadCategories();
     } catch {
       toast.error('Delete failed');
     }
   };
 
   /* -------------------------------------------------------------------------- */
-  /* DRAG */
-/* -------------------------------------------------------------------------- */
+  /* DRAG — root categories only */
+  /* -------------------------------------------------------------------------- */
+
+  const rootCategories = categories.filter((c) => !c.parent_category_id);
 
   const handleDragEnd = async (event: any) => {
     const { active, over } = event;
-
     if (!over || active.id === over.id) return;
 
-    const oldIndex = categories.findIndex(
-      (c) => c.id === active.id
-    );
+    const oldIndex = rootCategories.findIndex((c) => c.id === active.id);
+    const newIndex = rootCategories.findIndex((c) => c.id === over.id);
+    const reordered = arrayMove(rootCategories, oldIndex, newIndex);
 
-    const newIndex = categories.findIndex(
-      (c) => c.id === over.id
-    );
-
-    const reordered = arrayMove(
-      categories,
-      oldIndex,
-      newIndex
-    );
-
-    setCategories(reordered);
+    setCategories([
+      ...reordered,
+      ...categories.filter((c) => c.parent_category_id),
+    ]);
 
     await Promise.all(
       reordered.map((cat, index) =>
         supabaseBrowser
           .from('menu_categories')
-          .update({
-            display_order: index,
-          })
+          .update({ display_order: index })
           .eq('id', cat.id)
       )
     );
@@ -375,7 +316,7 @@ export default function MenuCategoriesPage() {
 
   /* -------------------------------------------------------------------------- */
   /* LOADING */
-/* -------------------------------------------------------------------------- */
+  /* -------------------------------------------------------------------------- */
 
   if (loading)
     return (
@@ -387,308 +328,193 @@ export default function MenuCategoriesPage() {
     );
 
   /* -------------------------------------------------------------------------- */
+  /* CATEGORY CARD */
+  /* -------------------------------------------------------------------------- */
+
+  const rootOptions = categories.filter((c) => !c.parent_category_id);
+  const tree = buildTree(categories);
+
+  function CategoryCard({ category, isChild }: { category: MenuCategory; isChild?: boolean }) {
+    return (
+      <Card className={`rounded-xl shadow-sm ${isChild ? 'border-l-4 border-l-slate-300' : ''}`}>
+        <CardHeader className="space-y-3">
+          <div>
+            <CardTitle className="text-base md:text-lg">{category.name}</CardTitle>
+            <CardDescription>
+              {category.dishes_count} dishes
+              {isChild && <span className="ml-2 text-xs text-slate-400">subcategory</span>}
+            </CardDescription>
+          </div>
+
+          <div className="flex flex-wrap gap-2">
+            <Switch
+              checked={category.is_active}
+              onCheckedChange={() => toggleCategoryActive(category.id, category.is_active)}
+            />
+
+            <Button
+              size="icon"
+              variant="ghost"
+              onClick={() => {
+                setEditingCategory(category);
+                setEditName(category.name);
+                setEditParentId(category.parent_category_id ?? '');
+              }}
+            >
+              <Pencil size={18} />
+            </Button>
+
+            <Button
+              size="icon"
+              variant="ghost"
+              className="text-red-500"
+              onClick={() => deleteCategory(category)}
+            >
+              <Trash2 size={18} />
+            </Button>
+
+            {restaurantId && (
+              <Link href={`/admin/restaurants/${restaurantId}/${category.id}`} className="flex-1">
+                <Button variant="outline" className="w-full">
+                  Edit items
+                  <ChevronRight size={16} />
+                </Button>
+              </Link>
+            )}
+          </div>
+        </CardHeader>
+      </Card>
+    );
+  }
+
+  /* -------------------------------------------------------------------------- */
   /* UI */
-/* -------------------------------------------------------------------------- */
+  /* -------------------------------------------------------------------------- */
 
   return (
     <div className="pb-32">
 
       {/* MOBILE STICKY HEADER */}
-
-      <div className="
-        sticky
-        top-0
-        z-10
-        bg-white
-        border-b
-        p-4
-      ">
-
-        <div className="
-          flex
-          items-center
-          justify-between
-          gap-2
-        ">
-
+      <div className="sticky top-0 z-10 bg-white border-b p-4">
+        <div className="flex items-center justify-between gap-2">
           <div>
-            <h1 className="
-              text-xl
-              md:text-3xl
-              font-bold
-            ">
-              Categories
-            </h1>
-
-            <p className="text-sm text-muted-foreground">
-              {categories.length} total
-            </p>
+            <h1 className="text-xl md:text-3xl font-bold">Categories</h1>
+            <p className="text-sm text-muted-foreground">{categories.length} total</p>
           </div>
 
-          <Dialog
-            open={dialogOpen}
-            onOpenChange={setDialogOpen}
-          >
-
+          <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
             <DialogTrigger asChild>
-
-              <Button size="sm">
-
-                <Plus size={16} />
-
-              </Button>
-
+              <Button size="sm"><Plus size={16} /></Button>
             </DialogTrigger>
 
-            <DialogContent className="
-              max-w-md
-              w-[95%]
-              rounded-2xl
-            ">
-
+            <DialogContent className="max-w-md w-[95%] rounded-2xl">
               <DialogHeader>
-
-                <DialogTitle>
-                  New Category
-                </DialogTitle>
-
+                <DialogTitle>New Category</DialogTitle>
               </DialogHeader>
 
               <Input
                 placeholder="Category name"
                 value={newCategoryName}
-                onChange={(e) =>
-                  setNewCategoryName(
-                    e.target.value
-                  )
-                }
+                onChange={(e) => setNewCategoryName(e.target.value)}
               />
 
-              <DialogFooter>
-
-                <Button
-                  className="w-full"
-                  onClick={createCategory}
+              <div className="space-y-1">
+                <label className="text-sm text-muted-foreground">Parent category (optional)</label>
+                <select
+                  className="w-full border rounded-md px-3 py-2 text-sm"
+                  value={newParentId}
+                  onChange={(e) => setNewParentId(e.target.value)}
                 >
-                  Create
-                </Button>
+                  <option value="">None (root category)</option>
+                  {rootOptions.map((c) => (
+                    <option key={c.id} value={c.id}>{c.name}</option>
+                  ))}
+                </select>
+              </div>
 
+              <DialogFooter>
+                <Button className="w-full" onClick={createCategory}>Create</Button>
               </DialogFooter>
-
             </DialogContent>
-
           </Dialog>
-
         </div>
-
       </div>
 
       {/* EMPTY */}
-
       {categories.length === 0 && (
-
         <Card className="m-4 border-dashed">
-
-          <CardContent className="
-            py-16
-            text-center
-          ">
-
-            <FolderOpen className="
-              mx-auto
-              mb-4
-            "/>
-
+          <CardContent className="py-16 text-center">
+            <FolderOpen className="mx-auto mb-4" />
             No categories yet
-
           </CardContent>
-
         </Card>
-
       )}
 
-      {/* LIST */}
-
+      {/* TREE LIST */}
       <div className="p-4">
-
         <DndContext
           sensors={sensors}
           collisionDetection={closestCenter}
           onDragEnd={handleDragEnd}
         >
-
           <SortableContext
-            items={categories.map(c => c.id)}
-            strategy={
-              verticalListSortingStrategy
-            }
+            items={rootCategories.map((c) => c.id)}
+            strategy={verticalListSortingStrategy}
           >
-
             <div className="space-y-3">
-
-              {categories.map(category => (
-
-                <SortableCategory
-                  key={category.id}
-                  category={category}
-                >
-
-                  <Card className="
-                    rounded-xl
-                    shadow-sm
-                  ">
-
-                    <CardHeader
-                      className="
-                        space-y-3
-                      "
-                    >
-
-                      {/* TITLE */}
-
-                      <div>
-
-                        <CardTitle className="
-                          text-base
-                          md:text-lg
-                        ">
-                          {category.name}
-                        </CardTitle>
-
-                        <CardDescription>
-                          {category.dishes_count} dishes
-                        </CardDescription>
-
+              {tree.map((node) => (
+                <SortableCategory key={node.id} category={node}>
+                  <div className="space-y-2">
+                    <CategoryCard category={node} />
+                    {node.children.length > 0 && (
+                      <div className="ml-6 space-y-2">
+                        {node.children.map((child) => (
+                          <CategoryCard key={child.id} category={child} isChild />
+                        ))}
                       </div>
-
-                      {/* MOBILE BUTTON STACK */}
-
-                      <div className="
-                        flex
-                        flex-wrap
-                        gap-2
-                      ">
-
-                        <Switch
-                          checked={category.is_active}
-                          onCheckedChange={() =>
-                            toggleCategoryActive(
-                              category.id,
-                              category.is_active
-                            )
-                          }
-                        />
-
-                        <Button
-                          size="icon"
-                          variant="ghost"
-                          onClick={() => {
-                            setEditingCategory(category);
-                            setEditName(category.name);
-                          }}
-                        >
-                          <Pencil size={18}/>
-                        </Button>
-
-                        <Button
-                          size="icon"
-                          variant="ghost"
-                          className="text-red-500"
-                          onClick={() =>
-                            deleteCategory(category)
-                          }
-                        >
-                          <Trash2 size={18}/>
-                        </Button>
-
-                        {restaurantId && (
-
-                          <Link
-                            href={`/admin/restaurants/${restaurantId}/${category.id}`}
-                            className="flex-1"
-                          >
-
-                            <Button
-                              variant="outline"
-                              className="
-                                w-full
-                              "
-                            >
-
-                              Edit items
-
-                              <ChevronRight
-                                size={16}
-                              />
-
-                            </Button>
-
-                          </Link>
-
-                        )}
-
-                      </div>
-
-                    </CardHeader>
-
-                  </Card>
-
+                    )}
+                  </div>
                 </SortableCategory>
-
               ))}
-
             </div>
-
           </SortableContext>
-
         </DndContext>
-
       </div>
 
       {/* EDIT DIALOG */}
-
-      <Dialog
-        open={!!editingCategory}
-        onOpenChange={() =>
-          setEditingCategory(null)
-        }
-      >
-
-        <DialogContent className="
-          max-w-md
-          w-[95%]
-        ">
-
+      <Dialog open={!!editingCategory} onOpenChange={() => setEditingCategory(null)}>
+        <DialogContent className="max-w-md w-[95%]">
           <DialogHeader>
-
-            <DialogTitle>
-              Edit Category
-            </DialogTitle>
-
+            <DialogTitle>Edit Category</DialogTitle>
           </DialogHeader>
 
           <Input
             value={editName}
-            onChange={(e) =>
-              setEditName(e.target.value)
-            }
+            onChange={(e) => setEditName(e.target.value)}
+            placeholder="Category name"
           />
 
-          <DialogFooter>
-
-            <Button
-              className="w-full"
-              onClick={updateCategoryName}
+          <div className="space-y-1">
+            <label className="text-sm text-muted-foreground">Parent category (optional)</label>
+            <select
+              className="w-full border rounded-md px-3 py-2 text-sm"
+              value={editParentId}
+              onChange={(e) => setEditParentId(e.target.value)}
             >
-              Save
-            </Button>
+              <option value="">None (root category)</option>
+              {rootOptions
+                .filter((c) => c.id !== editingCategory?.id)
+                .map((c) => (
+                  <option key={c.id} value={c.id}>{c.name}</option>
+                ))}
+            </select>
+          </div>
 
+          <DialogFooter>
+            <Button className="w-full" onClick={updateCategory}>Save</Button>
           </DialogFooter>
-
         </DialogContent>
-
       </Dialog>
-
     </div>
   );
 }

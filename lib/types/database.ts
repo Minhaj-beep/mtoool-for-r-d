@@ -58,6 +58,7 @@ export interface Category {
   menu_id: string;
   name: string;
   display_order: number;
+  parent_category_id: string | null;
   created_at: string;
 }
 

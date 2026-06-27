@@ -42,8 +42,11 @@ type PublicMenuCategory = {
   id: string;
   name: string;
   display_order: number;
+  parent_category_id: string | null;
   dishes: PublicMenuItem[];
 };
+
+type PublicMenuCategoryNode = PublicMenuCategory & { children: PublicMenuCategory[] };
 
 function SkeletonLoader() {
   return (
@@ -205,6 +208,72 @@ function DishBadges({
   );
 }
 
+function DishRow({
+  item,
+  dishIndex,
+  hasImage,
+  themeColor,
+  onSelect,
+}: {
+  item: PublicMenuItem;
+  dishIndex: number;
+  hasImage: boolean;
+  themeColor: string;
+  onSelect: (dish: PublicMenuItem) => void;
+}) {
+  return (
+    <div className="px-6 py-5 md:px-8 md:py-6 hover:bg-slate-50 transition-colors duration-200">
+      <div className="flex gap-4 md:gap-6">
+        {hasImage && (
+          <div className="flex-shrink-0">
+            <button
+              onClick={() => onSelect(item)}
+              className="block group relative overflow-hidden rounded-xl"
+            >
+              <img
+                src={item.image_url!}
+                alt={item.name}
+                className="w-24 h-24 md:w-32 md:h-32 object-cover shadow-md ring-1 ring-slate-200 transition-transform group-hover:scale-110"
+                loading="lazy"
+              />
+              <div className="absolute inset-0 bg-black/0 group-hover:bg-black/20 transition-colors flex items-center justify-center">
+                <Search className="w-6 h-6 text-white opacity-0 group-hover:opacity-100 transition-opacity" />
+              </div>
+            </button>
+          </div>
+        )}
+        <div className="flex-1 min-w-0">
+          <DishBadges dish={item} index={dishIndex} hasImage={hasImage} />
+          <div className="flex flex-col sm:flex-row sm:justify-between sm:items-start gap-2 md:gap-4">
+            <div className="flex-1 min-w-0">
+              <h3 className="text-lg md:text-xl font-bold text-slate-900 mb-1.5">{item.name}</h3>
+              {item.description && (
+                <p className="text-sm md:text-base text-slate-600 leading-relaxed line-clamp-2">
+                  {item.description}
+                </p>
+              )}
+            </div>
+            <div className="flex-shrink-0">
+              <div
+                className="inline-flex flex-col items-start px-4 py-2 rounded-lg text-sm md:text-base font-semibold shadow-sm gap-0.5"
+                style={{ backgroundColor: `${themeColor}15`, color: themeColor }}
+              >
+                {item.dish_variants?.length > 0 ? (
+                  item.dish_variants.map((v) => (
+                    <span key={v.id} className="leading-tight">{v.name} — ₹{v.price}</span>
+                  ))
+                ) : (
+                  <span className="text-xl md:text-2xl font-bold">₹{item.price}</span>
+                )}
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 export default function PublicMenuPage() {
   const params = useParams();
   const slug = params.slug as string;
@@ -313,6 +382,7 @@ export default function PublicMenuPage() {
           id,
           name,
           display_order,
+          parent_category_id,
           dishes (
             id,
             name,
@@ -339,10 +409,11 @@ export default function PublicMenuPage() {
       const formatted: PublicMenuCategory[] =
       data?.map((category) => ({
         ...category,
+        parent_category_id: category.parent_category_id ?? null,
         dishes:
           category.dishes?.map((item) => ({
             ...item,
-            dish_variants: item.dish_variants ?? []  // 🔥 FIX
+            dish_variants: item.dish_variants ?? []
           })).filter((item) => item.is_available) ?? [],
       })) ?? [];
 
@@ -402,6 +473,25 @@ export default function PublicMenuPage() {
       }))
       .filter((category) => category.dishes.length > 0);
   }, [categories, searchQuery]);
+
+  const categoryTree = useMemo((): PublicMenuCategoryNode[] => {
+    const map = new Map<string, PublicMenuCategoryNode>();
+    const roots: PublicMenuCategoryNode[] = [];
+    filteredCategories.forEach((c) => map.set(c.id, { ...c, children: [] }));
+    map.forEach((node) => {
+      if (node.parent_category_id && map.has(node.parent_category_id)) {
+        map.get(node.parent_category_id)!.children.push(node);
+      } else {
+        roots.push(node);
+      }
+    });
+    return roots;
+  }, [filteredCategories]);
+
+  const navCategories = useMemo(
+    () => categories.filter((c) => !c.parent_category_id),
+    [categories]
+  );
 
   const featuredDishes = useMemo(() => {
     const allDishes = categories.flatMap((cat) => cat.dishes);
@@ -572,10 +662,10 @@ export default function PublicMenuPage() {
           </div>
         </div>
 
-        {filteredCategories.length > 1 && !searchQuery && (
+        {navCategories.length > 1 && !searchQuery && (
           <div className="sticky top-0 z-20 bg-white/95 backdrop-blur-sm border-y border-slate-200 shadow-sm mb-8 -mx-4 sm:-mx-6 lg:-mx-8 px-4 sm:px-6 lg:px-8 py-3">
             <div className="flex gap-2 overflow-x-auto scrollbar-hide">
-              {filteredCategories.map((category) => (
+              {navCategories.map((category) => (
                 <button
                   key={category.id}
                   onClick={() => scrollToCategory(category.id)}
@@ -584,11 +674,7 @@ export default function PublicMenuPage() {
                       ? 'text-white shadow-md'
                       : 'bg-slate-100 text-slate-700 hover:bg-slate-200'
                   }`}
-                  style={
-                    activeCategory === category.id
-                      ? { backgroundColor: restaurant.theme_color }
-                      : {}
-                  }
+                  style={activeCategory === category.id ? { backgroundColor: restaurant.theme_color } : {}}
                 >
                   {category.name}
                 </button>
@@ -686,58 +772,43 @@ export default function PublicMenuPage() {
               <div className="w-24 h-24 bg-slate-100 rounded-full flex items-center justify-center mx-auto mb-6">
                 <Search className="w-12 h-12 text-slate-400" />
               </div>
-              <h3 className="text-2xl font-bold text-slate-900 mb-2">
-                No dishes found
-              </h3>
-              <p className="text-slate-600 text-lg mb-4">
-                Try searching with different keywords
-              </p>
-              <Button
-                onClick={() => setSearchQuery('')}
-                variant="outline"
-                className="mt-4"
-              >
+              <h3 className="text-2xl font-bold text-slate-900 mb-2">No dishes found</h3>
+              <p className="text-slate-600 text-lg mb-4">Try searching with different keywords</p>
+              <Button onClick={() => setSearchQuery('')} variant="outline" className="mt-4">
                 Clear Search
               </Button>
             </div>
           ) : (
             <div className="space-y-6 md:space-y-8">
-              {filteredCategories.map((category, categoryIndex) => {
+              {categoryTree.map((category, categoryIndex) => {
                 const isExpanded = expandedCategories.has(category.id);
-                const dishCount = category.dishes.length;
+                const hasChildren = category.children.length > 0;
+                const dishCount = hasChildren
+                  ? category.children.reduce((sum, c) => sum + c.dishes.length, 0)
+                  : category.dishes.length;
 
                 return (
                   <div
                     key={category.id}
                     id={category.id}
-                    ref={(el) => {
-                      if (el) categoryRefs.current.set(category.id, el);
-                    }}
+                    ref={(el) => { if (el) categoryRefs.current.set(category.id, el); }}
                     className="bg-white rounded-2xl shadow-md hover:shadow-xl transition-shadow duration-300 overflow-hidden border border-slate-100"
                   >
                     <button
                       onClick={() => toggleCategory(category.id)}
                       className="w-full px-6 py-5 md:px-8 md:py-6 relative overflow-hidden text-left hover:bg-slate-50 transition-colors"
-                      style={{
-                        background: `linear-gradient(135deg, ${restaurant.theme_color}15 0%, ${restaurant.theme_color}08 100%)`,
-                      }}
+                      style={{ background: `linear-gradient(135deg, ${restaurant.theme_color}15 0%, ${restaurant.theme_color}08 100%)` }}
                     >
                       <div className="flex items-center justify-between gap-3">
                         <div className="flex items-center gap-3 flex-1">
                           <Badge
                             className="text-lg md:text-xl font-bold px-4 py-1.5 shadow-sm"
-                            style={{
-                              backgroundColor: restaurant.theme_color,
-                              color: 'white',
-                            }}
+                            style={{ backgroundColor: restaurant.theme_color, color: 'white' }}
                           >
                             {categoryIndex + 1}
                           </Badge>
                           <div>
-                            <h2
-                              className="text-2xl md:text-3xl font-bold"
-                              style={{ color: restaurant.theme_color }}
-                            >
+                            <h2 className="text-2xl md:text-3xl font-bold" style={{ color: restaurant.theme_color }}>
                               {category.name}
                             </h2>
                             <p className="text-sm text-slate-600 mt-1">
@@ -753,88 +824,72 @@ export default function PublicMenuPage() {
                       </div>
                     </button>
 
-                    <div
-                      className={`transition-all duration-300 ease-in-out ${
-                        isExpanded
-                          ? 'max-h-[10000px] opacity-100'
-                          : 'max-h-0 opacity-0 overflow-hidden'
-                      }`}
-                    >
-                      <div className="divide-y divide-slate-100">
-                        {category.dishes.length === 0 ? (
-                          <div className="px-6 py-12 md:px-8 md:py-16 text-center text-slate-500">
-                            <p className="text-lg">No items in this category yet</p>
-                          </div>
-                        ) : (
-                          category.dishes.map((item, dishIndex) => {
-                            const hasImage = item.image_url && planLimits?.allowImages;
-                            return (
+                    <div className={`transition-all duration-300 ease-in-out ${isExpanded ? 'max-h-[10000px] opacity-100' : 'max-h-0 opacity-0 overflow-hidden'}`}>
+                      {hasChildren ? (
+                        <div>
+                          {category.children.map((sub) => (
+                            <div key={sub.id}>
                               <div
-                                key={item.id}
-                                className="px-6 py-5 md:px-8 md:py-6 hover:bg-slate-50 transition-colors duration-200"
+                                className="px-6 py-3 md:px-8"
+                                style={{
+                                  background: `linear-gradient(135deg, ${restaurant.theme_color}08 0%, transparent 100%)`,
+                                  borderTop: `1px solid ${restaurant.theme_color}20`,
+                                }}
                               >
-                                <div className="flex gap-4 md:gap-6">
-                                  {hasImage && (
-                                    <div className="flex-shrink-0">
-                                      <button
-                                        onClick={() => setSelectedDish(item)}
-                                        className="block group relative overflow-hidden rounded-xl"
-                                      >
-                                        <img
-                                          src={item.image_url!}
-                                          alt={item.name}
-                                          className="w-24 h-24 md:w-32 md:h-32 object-cover shadow-md ring-1 ring-slate-200 transition-transform group-hover:scale-110"
-                                          loading="lazy"
-                                        />
-                                        <div className="absolute inset-0 bg-black/0 group-hover:bg-black/20 transition-colors flex items-center justify-center">
-                                          <Search className="w-6 h-6 text-white opacity-0 group-hover:opacity-100 transition-opacity" />
-                                        </div>
-                                      </button>
-                                    </div>
-                                  )}
-
-                                  <div className="flex-1 min-w-0">
-                                    <DishBadges dish={item} index={dishIndex} hasImage={!!hasImage} />
-                                    <div className="flex flex-col sm:flex-row sm:justify-between sm:items-start gap-2 md:gap-4">
-                                      <div className="flex-1 min-w-0">
-                                        <h3 className="text-lg md:text-xl font-bold text-slate-900 mb-1.5">
-                                          {item.name}
-                                        </h3>
-                                        {item.description && (
-                                          <p className="text-sm md:text-base text-slate-600 leading-relaxed line-clamp-2">
-                                            {item.description}
-                                          </p>
-                                        )}
-                                      </div>
-                                      <div className="flex-shrink-0">
-                                        <div
-                                          className="inline-flex flex-col items-start px-4 py-2 rounded-lg text-sm md:text-base font-semibold shadow-sm gap-0.5"
-                                          style={{
-                                            backgroundColor: `${restaurant.theme_color}15`,
-                                            color: restaurant.theme_color,
-                                          }}
-                                        >
-                                          {item.dish_variants?.length > 0 ? (
-                                            item.dish_variants.map((v) => (
-                                              <span key={v.id} className="leading-tight">
-                                                {v.name} — ₹{v.price}
-                                              </span>
-                                            ))
-                                          ) : (
-                                            <span className="text-xl md:text-2xl font-bold">
-                                              ₹{item.price}
-                                            </span>
-                                          )}
-                                        </div>
-                                      </div>
-                                    </div>
-                                  </div>
-                                </div>
+                                <h3 className="text-lg md:text-xl font-semibold" style={{ color: restaurant.theme_color }}>
+                                  {sub.name}
+                                </h3>
+                                <p className="text-xs text-slate-500">
+                                  {sub.dishes.length} {sub.dishes.length === 1 ? 'item' : 'items'}
+                                </p>
                               </div>
-                            );
-                          })
-                        )}
-                      </div>
+                              <div className="divide-y divide-slate-100">
+                                {sub.dishes.length === 0 ? (
+                                  <div className="px-6 py-8 md:px-8 text-center text-slate-500 text-sm">
+                                    No items in this subcategory
+                                  </div>
+                                ) : (
+                                  sub.dishes.map((item, dishIndex) => {
+                                    const hasImage = !!(item.image_url && planLimits?.allowImages);
+                                    return (
+                                      <DishRow
+                                        key={item.id}
+                                        item={item}
+                                        dishIndex={dishIndex}
+                                        hasImage={hasImage}
+                                        themeColor={restaurant.theme_color}
+                                        onSelect={setSelectedDish}
+                                      />
+                                    );
+                                  })
+                                )}
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                      ) : (
+                        <div className="divide-y divide-slate-100">
+                          {category.dishes.length === 0 ? (
+                            <div className="px-6 py-12 md:px-8 md:py-16 text-center text-slate-500">
+                              <p className="text-lg">No items in this category yet</p>
+                            </div>
+                          ) : (
+                            category.dishes.map((item, dishIndex) => {
+                              const hasImage = !!(item.image_url && planLimits?.allowImages);
+                              return (
+                                <DishRow
+                                  key={item.id}
+                                  item={item}
+                                  dishIndex={dishIndex}
+                                  hasImage={hasImage}
+                                  themeColor={restaurant.theme_color}
+                                  onSelect={setSelectedDish}
+                                />
+                              );
+                            })
+                          )}
+                        </div>
+                      )}
                     </div>
                   </div>
                 );

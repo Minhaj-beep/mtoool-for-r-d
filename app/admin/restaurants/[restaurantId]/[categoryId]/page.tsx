@@ -73,6 +73,7 @@ export default function CategoryDishesPage() {
   const [restaurant, setRestaurant] = useState<Restaurant | null>(null);
   const [category, setCategory] = useState<MenuCategory | null>(null);
   const [loading, setLoading] = useState(true);
+  const [hasChildren, setHasChildren] = useState(false);
 
   // Dialog / editing
   const [dishDialogOpen, setDishDialogOpen] = useState(false);
@@ -166,7 +167,14 @@ export default function CategoryDishesPage() {
       if (error || !data) throw new Error('Category not found');
 
       setCategory(data);
-      setLocalCategory(data); // copy into local state for optimistic updates
+      setLocalCategory(data);
+
+      const { count } = await supabaseBrowser
+        .from('menu_categories')
+        .select('id', { count: 'exact', head: true })
+        .eq('parent_category_id', categoryId);
+
+      setHasChildren((count ?? 0) > 0);
     } catch (e: any) {
       toast.error(e?.message || 'Failed to load');
     } finally {
@@ -513,12 +521,19 @@ export default function CategoryDishesPage() {
               setDishDialogOpen(true);
             }}
             size="sm"
+            disabled={hasChildren}
           >
             <Plus className="w-4 h-4 mr-2" />
             Add Item
           </Button>
         </div>
       </div>
+
+      {hasChildren && (
+        <div className="rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800">
+          This category has subcategories. Add dishes to the subcategories instead.
+        </div>
+      )}
 
       {/* dishes grid: single column on small, 2 cols on md */}
       <Card>
